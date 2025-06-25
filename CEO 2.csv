@@ -1,0 +1,3 @@
+import pandas as pd
+with pd.ExcelWriter('CEO 2.xlsx') as writer:
+    pd.DataFrame({'A':[9,10],'B':[11,12]}).to_excel(writer, index=False, sheet_name='Sheet1') 
