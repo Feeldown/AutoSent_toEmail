@@ -1,5 +1,3 @@
-position_and_name,email,survey_id,uuid,url,firstname,lastname,position,name,check,sent_status
-CEO พรเทพ นิวัตยะกุล,xxx@yahoo.com,xxxx,xxxx2a7f-34ba-4306-84b3-d4c070a452ee,https://centraldigital.cattelecom.com/survey/34ba,Pornthep,Nivatyakul,CEO 0,Pornthep Nivatyakul,NO,yes
-CEO พรเทพ นิวัตยะกุล,xxx@gmail.com,xxxx,xxxxb58e-dc4a-4d9f-abb1-dd9323db8bbf,https://centraldigital.cattelecom.com/survey/dc4a,Pornthep,Nivatyakul,CEO 1,Pornthep Nivatyakul,NO,yes
-CEO พรเทพ นิวัตยะกุล,pornthep.n@ntplc.co.th,xxxx,33ca0843-b6f0-4dc0-baec-6d4b35c1683e,https://centraldigital.cattelecom.com/survey/b6f0,Pornthep,Nivatyakulsa,CEO 2,Pornthep Nivatyakul,YES,yes
-CFO ธนชัย ศึกษา,Thanachaisuksa25774@gmail.com,xxxx,xxxxb58e-dc4a-4d9f-abb1-dd9323db8bbf,https://centraldigital.cattelecom.com/survey/dc4a,Thanachai,Suksa,CFO 0,Thanachai Suksa,YES,yes
+name,phonenumber,email_nt,gmail,foldername(ชื่อFolder),sent_status
+ธนชัย ศึกษา,963533617,thanachai.s@ntplc.co.th,thanachaisuksa25774@gmail.com,อซจ.,yes
+พรเทพ นิวัตยะกุล,0,pornthep.n@ntplc.co.th,------,กสส.,yes
