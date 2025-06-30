@@ -11,6 +11,7 @@ from email import encoders
 import os
 import re
 import requests
+import pathlib
 
 def extract_file_and_sheet(position_str):
     # เช่น "สายงาน ฐ_Form_Q_สฐฐ (FORM_INPUT)" -> ("สายงาน ฐ_Form_Q_สฐฐ", "FORM_INPUT")
@@ -29,8 +30,19 @@ def reset_sent_status(csv_path):
     except Exception as e:
         print(f'Error resetting sent_status: {e}')
 
+def reset_sent_status_xlsx(xlsx_path):
+    try:
+        df = pd.read_excel(xlsx_path, header=1)
+        if 'sent_status' in df.columns:
+            df['sent_status'] = ''
+            df.to_excel(xlsx_path, index=False)
+            print('Reset sent_status complete.')
+    except Exception as e:
+        print(f'Error resetting sent_status: {e}')
+
 # --- Reset sent_status ทุกครั้งที่รัน ---
-reset_sent_status('position_.csv')
+# reset_sent_status('position_.csv')
+reset_sent_status_xlsx('ข้อมูลประกอบการส่งเมล์ Q.xlsx')
 
 config = configparser.ConfigParser(interpolation=None)
 config.read("./config.ini")
@@ -46,12 +58,15 @@ port = config["SMTP"]["Port"] # 465 for SSL
 print(sender_name)
 print(sender_email)
 
-# --- อ่านข้อมูลจากไฟล์ position_.csv ---
-try:
-    df = pd.read_csv('position_.csv')
-except FileNotFoundError:
-    print("Error: 'position_.csv' not found. Please make sure the file is in the correct directory.")
-    exit()
+# --- อ่านข้อมูลจากไฟล์ ข้อมูลประกอบการส่งเมล์ Q.xlsx หรือ Q_sent.xlsx ถ้ามี ---
+sent_xlsx = 'ข้อมูลประกอบการส่งเมล์ Q_sent.xlsx'
+base_xlsx = 'ข้อมูลประกอบการส่งเมล์ Q.xlsx'
+if pathlib.Path(sent_xlsx).exists():
+    print(f"พบไฟล์ {sent_xlsx} จะทำงานต่อจากไฟล์นี้")
+    df = pd.read_excel(sent_xlsx, header=1)
+else:
+    print(f"ไม่พบไฟล์ {sent_xlsx} จะเริ่มจาก {base_xlsx}")
+    df = pd.read_excel(base_xlsx, header=1)
 
 # --- เพิ่มคอลัมน์ sent_status ถ้ายังไม่มี ---
 if 'sent_status' not in df.columns:
@@ -68,106 +83,82 @@ with smtplib.SMTP_SSL(mail_server, port, context=context) as server:
 
     # --- เตรียม mapping URL โฟลเดอร์จาก Email_Folder.xlsx ---
     def get_url_mapping(email_xlsx_path):
-        df_email = pd.read_excel(email_xlsx_path)
+        df_email = pd.read_excel(email_xlsx_path, header=0)
         mapping = {}
         for _, row in df_email.iterrows():
-            folder_name = str(row['File_Name_Sheet']).strip()
+            folder_name = str(row['ชื่อฝ่ายสายงาน']).strip()
             url = str(row['URL'])
             mapping[folder_name] = url
         return mapping
 
-    def download_google_sheet_xlsx(sheet_url, save_path):
-        match = re.search(r'/d/([a-zA-Z0-9-_]+)', sheet_url)
-        if not match:
-            print(f"Invalid Google Sheet URL: {sheet_url}")
-            return False
-        file_id = match.group(1)
-        export_url = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx"
-        try:
-            response = requests.get(export_url)
-            if response.status_code == 200:
-                with open(save_path, 'wb') as f:
-                    f.write(response.content)
-                print(f"Downloaded: {save_path}")
-                return True
-            else:
-                print(f"Failed to download: {sheet_url}")
-                return False
-        except Exception as e:
-            print(f"Error downloading: {sheet_url} : {e}")
-            return False
-
-    # --- เตรียม mapping URL ---
-    url_mapping = get_url_mapping('Email_folder.xlsx')
+    url_mapping = get_url_mapping('Email_Folder.xlsx')
 
     for idx, row in df.iterrows():
-        print(f"row {idx}: name={row.get('name')}, email_nt={row.get('email_nt')}, gmail={row.get('gmail')}, foldername={row.get('foldername(ชื่อFolder)')}, sent_status={row.get('sent_status', '')}")
+        print(f"row {idx}: ฝ่ายผู้ใช้บริการ={row.get('ส่วนงานผู้ใช้บริการ')}, To={row.get('Email ผู้ใช้บริการ (ระดับฝ่าย)')}, CC={row.get('Email ส่วนงานผู้ให้บริการ')}, sent_status={row.get('sent_status', '')}")
         # ข้ามถ้าส่งแล้ว
         if str(row.get('sent_status', '')).strip().upper() == 'SENT':
             continue
-        recipient_name = row.get('name', '')
-        email_nt = row.get('email_nt', '')
-        gmail = row.get('gmail', '')
-        recipient_emails = []
-        if pd.notna(email_nt) and email_nt:
-            recipient_emails.append(email_nt)
-        if pd.notna(gmail) and gmail:
-            recipient_emails.append(gmail)
-        if not recipient_emails or pd.isna(recipient_name) or not recipient_name:
-            print(f"Skipping row {idx+2} due to empty name or email.")
+        recipient_name = row.get('ส่วนงานผู้ใช้บริการ', '')
+        to_email = row.get('Email ผู้ใช้บริการ (ระดับฝ่าย)', '')
+        cc_email = row.get('Email ส่วนงานผู้ให้บริการ', '')
+        folder_name = str(row.get('ส่วนงานผู้ใช้บริการ', '')).strip()
+        folder_url = url_mapping.get(folder_name, '')
+        if pd.isna(to_email) or not to_email:
+            print(f"Skipping row {idx+2} due to empty To email.")
             continue
-        # --- หา URL โฟลเดอร์จาก mapping ---
-        folder_name = str(row.get('foldername(ชื่อFolder)', '')).strip()
-        print(f"LOOKUP: {folder_name}")
-        print(f"URL_MAPPING KEYS (ตัวอย่าง 5): {list(url_mapping.keys())[:5]}")
-        folder_url = url_mapping.get(folder_name, None)
-        print(f"FOUND URL: {folder_url}")
-        if not folder_url:
-            print(f"No folder URL found for {folder_name}")
-            folder_url = ''
+        # --- ดึง template ข้อความ ---
+        mail_template = row.get('รูปแบบข้อความในเมล์ที่จัดส่งให้ฝ่ายผู้ใช้บริการ', '')
+        if not mail_template or pd.isna(mail_template):
+            mail_template = f"เรียน ผจก. {recipient_name},\n\nขอเรียนแจ้งให้ท่านทราบว่า ทางฝ่ายบัญชีบริหาร ({sender_name}) ได้จัดส่งเอกสารสำคัญผ่านโฟลเดอร์ออนไลน์ กรุณาคลิกเพื่อตรวจสอบข้อมูล:\n{folder_url}\n\nขอแสดงความนับถือ\nฝ่ายบัญชีบริหาร\nบริษัท NT2025"
+        else:
+            import re
+            recipient_manager = 'ผจก. ' + str(row.get('ส่วนงานผู้ใช้บริการ', '')).strip()
+            user_department = str(row.get('ส่วนงานผู้ใช้บริการ', '')).strip()
+            mail_template = re.sub(
+                r'เรียน\s*\(ส่วนงานผู้ใช้บริการ.*?\)',
+                f'เรียน {recipient_manager}',
+                mail_template
+            )
+            mail_template = mail_template.replace('ส่วนงานผู้ใช้บริการ', user_department)
+            mail_template = mail_template.replace('ส่วนงานผู้ให้บริการ', str(row.get('ชื่อพนักงานบันทึกข้อมูล', '')).strip())
         # --- สร้าง message ---
         message = MIMEMultipart("mixed")
         message["Subject"] = subject
         message["From"] = formataddr((sender_name, sender_email))
-        message["To"] = ", ".join([formataddr((recipient_name, e)) for e in recipient_emails])
+        message["To"] = to_email
+        if pd.notna(cc_email) and cc_email:
+            message["Cc"] = cc_email
+            cc_list = [cc_email]
+        else:
+            cc_list = []
         body_part = MIMEMultipart("alternative")
-        part1 = MIMEText(f"""
-เรียนคุณ {recipient_name},
-
-ขอเรียนแจ้งให้ท่านทราบว่า ทางบริษัทได้จัดส่งเอกสารสำคัญผ่านโฟลเดอร์ออนไลน์ตามลิงก์ด้านล่างนี้ กรุณาคลิกเพื่อตรวจสอบข้อมูล:
-{folder_url}
-
-ขอแสดงความนับถือ
-ฝ่ายบัญชีบริหาร
-บริษัท NT2025
-""", "plain")
+        # plain
+        part1 = MIMEText(mail_template.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n'), "plain")
+        # html (รวมบรรทัดว่างซ้อนที่มี space/tab ให้เหลือบรรทัดเดียว)
+        html_body = re.sub(r'\n[ \t]*\n', '\n', mail_template)
+        html_body = html_body.replace('\n', '<br>')
         part2 = MIMEText(f"""
 <html>
   <body>
-    <p>เรียนคุณ <b>{recipient_name}</b>,</p>
-    <p>ขอเรียนแจ้งให้ท่านทราบว่า ทางฝ่ายบัญชีบริหารได้จัดส่งเอกสารสำคัญผ่านโฟลเดอร์ออนไลน์ตามลิงก์ด้านล่างนี้ กรุณาคลิกเพื่อตรวจสอบข้อมูล:<br/>
-    <a href='{folder_url}'>{folder_url}</a></p>
-    <p>ขอแสดงความนับถือ<br/>
-    ฝ่ายบัญชีบริหาร<br/>
-    บริษัท NT2025</p>
+    {html_body}
+    <br><a href='{folder_url}'>{folder_url}</a>
   </body>
 </html>
 """, "html")
         body_part.attach(part1)
         body_part.attach(part2)
         message.attach(body_part)
-        # --- ไม่แนบไฟล์ ---
         # --- ส่งอีเมล ---
         try:
-            server.sendmail(sender_email, recipient_emails, message.as_string())
-            print("Sent to:", recipient_name, recipient_emails)
-            df.at[idx, 'sent_status'] = 'yes'
+            server.sendmail(sender_email, [to_email] + cc_list, message.as_string())
+            print("Sent to:", recipient_name, to_email, "CC:", cc_list)
+            df.at[idx, 'sent_status'] = 'SENT'
         except Exception as e:
-            print(f"Failed to send to {recipient_name} {recipient_emails}: {e}")
-            df.at[idx, 'sent_status'] = 'no'
+            print(f"Failed to send to {recipient_name} {to_email}: {e}")
+            df.at[idx, 'sent_status'] = 'NO'
         time.sleep(1)
 
 # --- บันทึกสถานะกลับลงไฟล์ ---
-df.to_csv('position_.csv', index=False)
+df.to_excel('ข้อมูลประกอบการส่งเมล์ Q_sent.xlsx', index=False)
 
 print("End")
