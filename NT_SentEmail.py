@@ -11,7 +11,6 @@ from email import encoders
 import os
 import re
 import requests
-import pathlib
 
 def extract_file_and_sheet(position_str):
     # เช่น "สายงาน ฐ_Form_Q_สฐฐ (FORM_INPUT)" -> ("สายงาน ฐ_Form_Q_สฐฐ", "FORM_INPUT")
@@ -58,19 +57,20 @@ port = config["SMTP"]["Port"] # 465 for SSL
 print(sender_name)
 print(sender_email)
 
-# --- อ่านข้อมูลจากไฟล์ ข้อมูลประกอบการส่งเมล์ Q.xlsx หรือ Q_sent.xlsx ถ้ามี ---
-sent_xlsx = 'ข้อมูลประกอบการส่งเมล์ Q_sent.xlsx'
-base_xlsx = 'ข้อมูลประกอบการส่งเมล์ Q.xlsx'
-if pathlib.Path(sent_xlsx).exists():
-    print(f"พบไฟล์ {sent_xlsx} จะทำงานต่อจากไฟล์นี้")
-    df = pd.read_excel(sent_xlsx, header=1)
-else:
-    print(f"ไม่พบไฟล์ {sent_xlsx} จะเริ่มจาก {base_xlsx}")
-    df = pd.read_excel(base_xlsx, header=1)
+# --- อ่านข้อมูลจากไฟล์ ข้อมูลประกอบการส่งเมล์ Q.xlsx ---
+try:
+    df = pd.read_excel('ข้อมูลประกอบการส่งเมล์ Q.xlsx', header=1)
+except FileNotFoundError:
+    print("Error: 'ข้อมูลประกอบการส่งเมล์ Q.xlsx' not found. Please make sure the file is in the correct directory.")
+    exit()
 
 # --- เพิ่มคอลัมน์ sent_status ถ้ายังไม่มี ---
 if 'sent_status' not in df.columns:
     df['sent_status'] = ''
+
+# --- เพิ่มคอลัมน์ subject_content ---
+subject_content_value = 'เรื่อง ข้อมูลปริมาณการใช้งาน (Q) บริการราคาโอนระหว่างส่วนงาน (Transfer Price)'
+df['subject_content'] = subject_content_value
 
 # Create a secure SSL context
 context = ssl.create_default_context()
@@ -98,7 +98,7 @@ with smtplib.SMTP_SSL(mail_server, port, context=context) as server:
         # ข้ามถ้าส่งแล้ว
         if str(row.get('sent_status', '')).strip().upper() == 'SENT':
             continue
-        recipient_name = row.get('ส่วนงานผู้ใช้บริการ', '')
+        recipient_name = row.get('ส่วนงานผู้ใช้บริการ' '')
         to_email = row.get('Email ผู้ใช้บริการ (ระดับฝ่าย)', '')
         cc_email = row.get('Email ส่วนงานผู้ให้บริการ', '')
         folder_name = str(row.get('ส่วนงานผู้ใช้บริการ', '')).strip()
@@ -108,22 +108,49 @@ with smtplib.SMTP_SSL(mail_server, port, context=context) as server:
             continue
         # --- ดึง template ข้อความ ---
         mail_template = row.get('รูปแบบข้อความในเมล์ที่จัดส่งให้ฝ่ายผู้ใช้บริการ', '')
-        if not mail_template or pd.isna(mail_template):
-            mail_template = f"เรียน ผจก. {recipient_name},\n\nขอเรียนแจ้งให้ท่านทราบว่า ทางฝ่ายบัญชีบริหาร ({sender_name}) ได้จัดส่งเอกสารสำคัญผ่านโฟลเดอร์ออนไลน์ กรุณาคลิกเพื่อตรวจสอบข้อมูล:\n{folder_url}\n\nขอแสดงความนับถือ\nฝ่ายบัญชีบริหาร\nบริษัท NT2025"
-        else:
+        # ลบข้อความ subject_content ออกจากเนื้อหา (ถ้ามี)
+        subject_content = row.get('subject_content', '')
+        if subject_content:
             import re
-            recipient_manager = 'ผจก. ' + str(row.get('ส่วนงานผู้ใช้บริการ', '')).strip()
-            user_department = str(row.get('ส่วนงานผู้ใช้บริการ', '')).strip()
-            mail_template = re.sub(
-                r'เรียน\s*\(ส่วนงานผู้ใช้บริการ.*?\)',
-                f'เรียน {recipient_manager}',
-                mail_template
-            )
-            mail_template = mail_template.replace('ส่วนงานผู้ใช้บริการ', user_department)
-            mail_template = mail_template.replace('ส่วนงานผู้ให้บริการ', str(row.get('ชื่อพนักงานบันทึกข้อมูล', '')).strip())
+            # ลบ subject_content ออกจากทุกตำแหน่งในเนื้อหา
+            mail_template = re.sub(re.escape(subject_content), '', str(mail_template))
+            # ลบบรรทัดว่างที่เกิดจากการลบ subject_content
+            mail_template = re.sub(r'(^|\n)[ \t]*\n', '\n', mail_template)
+        # ลบ 'เรื่อง ...' และ 'เรียน ...' ที่ขึ้นต้นเนื้อหา (ถ้ามี)
+        mail_template = re.sub(r'^(เรื่อง.*\n)?(เรียน.*\n)?', '', mail_template, flags=re.IGNORECASE)
+        # ขึ้นต้นเนื้อหาด้วย 'เรียน <ชื่อผู้รับ>' โดยคงรูปแบบเว้นวรรคเดิม (ไม่มี ,)
+        recipient_manager = str(row.get('ส่วนงานผู้ใช้บริการ', '')).strip()
+        mail_template = f'เรียน {recipient_manager}\n' + mail_template.lstrip('\n').lstrip('\r')
+        # ลบบรรทัดว่างถัดจาก 'เรียน <ชื่อผู้รับ>' 1 บรรทัด (ถ้ามี)
+        mail_template = re.sub(r'^(เรียน [^\n]+)\n\s*\n', r'\1\n', mail_template)
+        # แทนที่ 'ส่วนงานผู้ให้บริการ' และ 'ส่วนงานผู้ใช้บริการ' ด้วยค่าจาก column ที่เกี่ยวข้อง
+        mail_template = mail_template.replace('ส่วนงานผู้ให้บริการ', str(row.get('ชื่อพนักงานบันทึกข้อมูล', '')).strip())
+        mail_template = mail_template.replace('ส่วนงานผู้ใช้บริการ', str(row.get('ส่วนงานผู้ใช้บริการ', '')).strip())
+        # --- เพิ่มลิงก์ folder_url ลงในเนื้อหา ---
+        link_text_plain = f"\n\nตรวจสอบเอกสารได้ที่: {folder_url}\n"
+        link_text_html = f"<br><br><a href='{folder_url}' style='font-size:16px;'>[คลิกเพื่อเปิดเอกสาร]</a><br>"
+        # --- จัดรูปแบบข้อความลงท้าย (ชิดซ้าย) ---
+        ending_plain = '\n\nจึงเรียนมาเพื่อโปรดพิจารณาดำเนินการ จะขอบคุณยิ่ง\nรบชง. โทร 02-5749831 , 02-5759565'
+        ending_html = """
+<br><br>
+จึงเรียนมาเพื่อโปรดพิจารณาดำเนินการ จะขอบคุณยิ่ง<br>
+รบชง. โทร 02-5749831 , 02-5759565
+"""
+        # ลบข้อความลงท้ายเดิม (ถ้ามี) เพื่อป้องกันซ้ำ
+        mail_template = re.sub(r'จึงเรียนมาเพื่อโปรดพิจารณาดำเนินการ.*?รบชง\. โทร.*', '', mail_template, flags=re.DOTALL)
+        mail_template = mail_template.rstrip('').rstrip('\r')
+        # --- จัดรูปแบบย่อหน้า 'เนื่องด้วย' ---
+        import re
+        # plain text: เว้นบรรทัดและเพิ่มช่องว่างข้างหน้าคำว่า 'เนื่องด้วย'
+        mail_template = re.sub(r'เนื่องด้วย', r'    เนื่องด้วย', mail_template)
+        # html: เว้นบรรทัดและเพิ่มช่องว่างข้างหน้าคำว่า 'เนื่องด้วย'
+        mail_template_html = re.sub(r'(<br>)*เนื่องด้วย', r'<br><br>&nbsp;&nbsp;&nbsp;&nbsp;เนื่องด้วย', mail_template.replace('\n', '<br>'))
+        # --- เพิ่มลิงก์และข้อความลงท้าย ---
+        mail_template_plain = mail_template + link_text_plain + ending_plain
+        html_body = mail_template_html + link_text_html + ending_html
         # --- สร้าง message ---
         message = MIMEMultipart("mixed")
-        message["Subject"] = subject
+        message["Subject"] = row.get('subject_content', subject)  # ใช้ subject_content เป็น subject
         message["From"] = formataddr((sender_name, sender_email))
         message["To"] = to_email
         if pd.notna(cc_email) and cc_email:
@@ -133,21 +160,27 @@ with smtplib.SMTP_SSL(mail_server, port, context=context) as server:
             cc_list = []
         body_part = MIMEMultipart("alternative")
         # plain
-        part1 = MIMEText(mail_template.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n'), "plain")
-        # html (รวมบรรทัดว่างซ้อนที่มี space/tab ให้เหลือบรรทัดเดียว)
-        html_body = re.sub(r'\n[ \t]*\n', '\n', mail_template)
-        html_body = html_body.replace('\n', '<br>')
+        part1 = MIMEText(mail_template_plain, "plain")
+        # html
         part2 = MIMEText(f"""
 <html>
   <body>
     {html_body}
-    <br><a href='{folder_url}'>{folder_url}</a>
   </body>
 </html>
 """, "html")
         body_part.attach(part1)
         body_part.attach(part2)
         message.attach(body_part)
+        # --- แนบไฟล์ถ้ามี ---
+        attachment_path = row.get('ไฟล์แนบ', '')
+        if pd.notna(attachment_path) and attachment_path and os.path.isfile(attachment_path):
+            with open(attachment_path, 'rb') as f:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(attachment_path)}"')
+            message.attach(part)
         # --- ส่งอีเมล ---
         try:
             server.sendmail(sender_email, [to_email] + cc_list, message.as_string())
@@ -155,7 +188,7 @@ with smtplib.SMTP_SSL(mail_server, port, context=context) as server:
             df.at[idx, 'sent_status'] = 'SENT'
         except Exception as e:
             print(f"Failed to send to {recipient_name} {to_email}: {e}")
-            df.at[idx, 'sent_status'] = 'NO'
+            df.at[idx, 'sent_status'] = 'no'
         time.sleep(1)
 
 # --- บันทึกสถานะกลับลงไฟล์ ---
